@@ -53,7 +53,9 @@ def get_stock_data(symbol, token=""):
         if 'data' not in data or len(data['data']) == 0:
             st.error(f"❌ 找不到股票代碼 {symbol} 的數據，請檢查股票代碼是否正確")
             st.info("💡 請輸入有效的台股代碼，例如: 2330 (台積電)、2317 (鴻海)、2454 (聯發科)")
+            st.info(f"HTTP 狀態碼: {response.status_code}")
             st.write("API 回應內容：", data)
+            st.write("原始回應文字：", response.text[:500])
             return None
 
         # 將數據轉換為 DataFrame
@@ -81,9 +83,19 @@ def get_stock_data(symbol, token=""):
     except requests.exceptions.RequestException as e:
         st.error(f"❌ API 連線錯誤: {str(e)}")
         st.info("💡 請檢查網路連線是否正常")
+        try:
+            st.info(f"原始回應狀態碼: {response.status_code}")
+            st.write("原始回應文字：", response.text[:500])
+        except Exception:
+            pass
         return None
     except Exception as e:
         st.error(f"❌ 數據獲取失敗: {str(e)}")
+        try:
+            st.info(f"原始回應狀態碼: {response.status_code}")
+            st.write("原始回應文字：", response.text[:500])
+        except Exception:
+            pass
         return None
 
 
