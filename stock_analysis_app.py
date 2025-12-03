@@ -1627,6 +1627,10 @@ def main():
             # 技術數據
             stock_data = get_stock_data(symbol, finmind_token)
             if stock_data is not None:
+                st.info(f"get_stock_data 回傳筆數: {len(stock_data)}, 欄位: {list(stock_data.columns)}")
+            else:
+                st.info("get_stock_data 回傳 None")
+            if stock_data is not None:
                 filtered_data = filter_by_date_range(stock_data, start_date, end_date)
                 if filtered_data is not None:
                     # 計算所有技術指標
