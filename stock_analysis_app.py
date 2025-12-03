@@ -441,6 +441,11 @@ def get_monthly_revenue(symbol, token=""):
             return None
 
         df = pd.DataFrame(data['data'])
+
+        if 'revenue' not in df.columns:
+            st.warning(f"⚠️ 月營收欄位缺失，取得欄位: {list(df.columns)}")
+            return None
+
         df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
 
         # 檢查數據結構
