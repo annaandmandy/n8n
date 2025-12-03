@@ -52,6 +52,7 @@ def get_stock_data(symbol):
         if 'data' not in data or len(data['data']) == 0:
             st.error(f"❌ 找不到股票代碼 {symbol} 的數據，請檢查股票代碼是否正確")
             st.info("💡 請輸入有效的台股代碼，例如: 2330 (台積電)、2317 (鴻海)、2454 (聯發科)")
+            st.write("API 回應內容：", data)
             return None
 
         # 將數據轉換為 DataFrame
@@ -444,6 +445,11 @@ def get_monthly_revenue(symbol, token=""):
 
         if 'revenue' not in df.columns:
             st.warning(f"⚠️ 月營收欄位缺失，取得欄位: {list(df.columns)}")
+            st.write("原始回應前2筆：", data.get('data', [])[:2])
+            return None
+        if 'revenue_month' not in df.columns:
+            st.warning(f"⚠️ 月營收日期欄位缺失，取得欄位: {list(df.columns)}")
+            st.write("原始回應前2筆：", data.get('data', [])[:2])
             return None
 
         df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
@@ -468,6 +474,10 @@ def get_monthly_revenue(symbol, token=""):
 
     except Exception as e:
         st.error(f"❌ 月營收數據錯誤: {str(e)}")
+        try:
+            st.write("原始回應內容：", data)
+        except Exception:
+            pass
         return None
 
 
