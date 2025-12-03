@@ -60,7 +60,6 @@ def get_stock_data(symbol, token=""):
 
         # 將數據轉換為 DataFrame
         df = pd.DataFrame(data['data'])
-        df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
 
         # 轉換日期格式
         df['date'] = pd.to_datetime(df['date'])
