@@ -56,6 +56,7 @@ def get_stock_data(symbol):
 
         # 將數據轉換為 DataFrame
         df = pd.DataFrame(data['data'])
+        df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
 
         # 轉換日期格式
         df['date'] = pd.to_datetime(df['date'])
@@ -310,6 +311,7 @@ def get_financial_statements(symbol, token=""):
             return None
 
         df = pd.DataFrame(data['data'])
+        df['value'] = pd.to_numeric(df['value'], errors='coerce')
         df['date'] = pd.to_datetime(df['date'])
         df_pivot = df.pivot_table(
             index='date',
@@ -318,7 +320,7 @@ def get_financial_statements(symbol, token=""):
             aggfunc='first'
         ).reset_index()
 
-        return df_pivot.sort_values('date', ascending=False)
+        return df_pivot.sort_values('date', ascending=False).reset_index(drop=True)
 
     except Exception as e:
         return None
@@ -341,6 +343,7 @@ def get_balance_sheet(symbol, token=""):
             return None
 
         df = pd.DataFrame(data['data'])
+        df['value'] = pd.to_numeric(df['value'], errors='coerce')
         df['date'] = pd.to_datetime(df['date'])
         df_pivot = df.pivot_table(
             index='date',
@@ -349,7 +352,7 @@ def get_balance_sheet(symbol, token=""):
             aggfunc='first'
         ).reset_index()
 
-        return df_pivot.sort_values('date', ascending=False)
+        return df_pivot.sort_values('date', ascending=False).reset_index(drop=True)
 
     except Exception as e:
         return None
@@ -365,15 +368,20 @@ def calculate_financial_ratios(income_df, balance_df):
         current_balance = balance_df.iloc[0]
 
         ratios = {}
+        total_assets = current_balance.get('TotalAssets', current_balance.get('Assets'))
+        equity = current_balance.get('Equity')
+        liabilities = current_balance.get('Liabilities')
+        current_assets = current_balance.get('CurrentAssets')
+        current_liabilities = current_balance.get('CurrentLiabilities')
 
         # ROE (股東權益報酬率)
-        if 'IncomeAfterTaxes' in current_income and 'Equity' in current_balance:
-            roe = (current_income['IncomeAfterTaxes'] / current_balance['Equity'] * 100) if current_balance['Equity'] > 0 else 0
+        if 'IncomeAfterTaxes' in current_income and equity:
+            roe = (current_income['IncomeAfterTaxes'] / equity * 100) if equity > 0 else 0
             ratios['ROE'] = roe
 
         # ROA (資產報酬率)
-        if 'IncomeAfterTaxes' in current_income and 'TotalAssets' in current_balance:
-            roa = (current_income['IncomeAfterTaxes'] / current_balance['TotalAssets'] * 100) if current_balance['TotalAssets'] > 0 else 0
+        if 'IncomeAfterTaxes' in current_income and total_assets:
+            roa = (current_income['IncomeAfterTaxes'] / total_assets * 100) if total_assets > 0 else 0
             ratios['ROA'] = roa
 
         # 毛利率
@@ -387,13 +395,13 @@ def calculate_financial_ratios(income_df, balance_df):
             ratios['淨利率'] = npm
 
         # 流動比率
-        if 'CurrentAssets' in current_balance and 'CurrentLiabilities' in current_balance:
-            cr = (current_balance['CurrentAssets'] / current_balance['CurrentLiabilities']) if current_balance['CurrentLiabilities'] > 0 else 0
+        if current_assets is not None and current_liabilities is not None:
+            cr = (current_assets / current_liabilities) if current_liabilities > 0 else 0
             ratios['流動比率'] = cr
 
         # 負債比率
-        if 'Liabilities' in current_balance and 'TotalAssets' in current_balance:
-            dr = (current_balance['Liabilities'] / current_balance['TotalAssets'] * 100) if current_balance['TotalAssets'] > 0 else 0
+        if liabilities is not None and total_assets:
+            dr = (liabilities / total_assets * 100) if total_assets > 0 else 0
             ratios['負債比率'] = dr
 
         # EPS
@@ -401,6 +409,146 @@ def calculate_financial_ratios(income_df, balance_df):
             ratios['EPS'] = current_income['EPS']
 
         return ratios
+
+    except Exception as e:
+        return None
+
+
+def get_monthly_revenue(symbol, token=""):
+    """
+    獲取月營收數據
+
+    參數:
+        symbol: 股票代碼
+        token: FinMind API Token
+
+    返回:
+        DataFrame: 月營收數據
+    """
+    try:
+        url = "https://api.finmindtrade.com/api/v4/data"
+        params = {
+            "dataset": "TaiwanStockMonthRevenue",
+            "data_id": symbol,
+            "start_date": (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d'),  # 改為2年數據以計算年增率
+            "token": token
+        }
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+
+        if 'data' not in data or len(data['data']) == 0:
+            st.warning(f"⚠️ 月營收數據獲取狀況: {data.get('msg', '無數據')}")
+            return None
+
+        df = pd.DataFrame(data['data'])
+        df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
+
+        # 檢查數據結構
+        st.info(f"📊 月營收數據筆數: {len(df)} | 欄位: {list(df.columns)}")
+
+        df['revenue_date'] = pd.to_datetime(df['revenue_month'])
+        df = df.sort_values('revenue_date', ascending=False).reset_index(drop=True)
+
+        # 反轉以計算正確的年增率和月增率
+        df_reversed = df.iloc[::-1].copy()
+
+        # 計算年增率和月增率（需要至少13個月數據才能計算年增率）
+        df_reversed['yoy_growth'] = df_reversed['revenue'].pct_change(periods=12) * 100  # 年增率
+        df_reversed['mom_growth'] = df_reversed['revenue'].pct_change(periods=1) * 100   # 月增率
+
+        # 再反轉回最新在前
+        df = df_reversed.iloc[::-1].copy()
+
+        return df.head(6)  # 最近6個月
+
+    except Exception as e:
+        st.error(f"❌ 月營收數據錯誤: {str(e)}")
+        return None
+
+
+def calculate_eps_trend(income_df):
+    """
+    計算近5季 EPS 趨勢（含季增、年增）
+
+    參數:
+        income_df: 損益表 DataFrame
+
+    返回:
+        DataFrame: EPS 趨勢數據
+    """
+    try:
+        if income_df is None or len(income_df) < 5:
+            return None
+
+        df = income_df.sort_values('date', ascending=False).head(5).copy().reset_index(drop=True)
+
+        if 'EPS' not in df.columns:
+            return None
+
+        df['EPS'] = pd.to_numeric(df['EPS'], errors='coerce')
+
+        prev_eps = df['EPS'].shift(-1)
+        year_ago_eps = df['EPS'].shift(-4)
+
+        df['QoQ'] = ((df['EPS'] - prev_eps) / prev_eps.abs() * 100).where(prev_eps != 0)
+        df['YoY'] = ((df['EPS'] - year_ago_eps) / year_ago_eps.abs() * 100).where(year_ago_eps != 0)
+
+        return df[['date', 'EPS', 'QoQ', 'YoY']]
+
+    except Exception as e:
+        return None
+
+
+def calculate_pe_ratio(current_price, eps):
+    """
+    計算本益比 (P/E Ratio)
+
+    參數:
+        current_price: 當前股價
+        eps: 每股盈餘
+
+    返回:
+        float: 本益比
+    """
+    if eps and eps > 0:
+        return current_price / eps
+    return None
+
+
+def calculate_margin_trends(income_df):
+    """
+    計算近4季毛利率與營益率趨勢
+
+    參數:
+        income_df: 損益表 DataFrame
+
+    返回:
+        DataFrame: 毛利率與營益率數據
+    """
+    try:
+        if income_df is None or len(income_df) < 4:
+            return None
+
+        df = income_df.sort_values('date', ascending=False).head(4).copy().reset_index(drop=True)
+        df = df.iloc[::-1]  # 取最近4季，反轉為時間順序
+
+        margin_data = []
+        for _, row in df.iterrows():
+            date = row.get('date')
+            revenue = row.get('Revenue', 0)
+            gross_profit = row.get('GrossProfit', 0)
+            operating_income = row.get('OperatingIncome', 0)
+
+            gross_margin = (gross_profit / revenue * 100) if revenue > 0 else 0
+            operating_margin = (operating_income / revenue * 100) if revenue > 0 else 0
+
+            margin_data.append({
+                'date': date,
+                '毛利率': gross_margin,
+                '營益率': operating_margin
+            })
+
+        return pd.DataFrame(margin_data)
 
     except Exception as e:
         return None
@@ -419,10 +567,12 @@ def calculate_piotroski_fscore(income_df, balance_df):
         previous = income_df.iloc[1]
         current_bs = balance_df.iloc[0]
         previous_bs = balance_df.iloc[1]
+        total_assets_current = current_bs.get('TotalAssets', current_bs.get('Assets', 0))
+        total_assets_prev = previous_bs.get('TotalAssets', previous_bs.get('Assets', 0))
 
         # 1. ROA 正值
-        if 'IncomeAfterTaxes' in current and 'TotalAssets' in current_bs:
-            roa = current['IncomeAfterTaxes'] / current_bs['TotalAssets'] if current_bs['TotalAssets'] > 0 else 0
+        if 'IncomeAfterTaxes' in current and total_assets_current:
+            roa = current['IncomeAfterTaxes'] / total_assets_current if total_assets_current > 0 else 0
             if roa > 0:
                 score += 1
             details['ROA正值'] = {'score': 1 if roa > 0 else 0, 'value': f"{roa:.2%}"}
@@ -435,9 +585,9 @@ def calculate_piotroski_fscore(income_df, balance_df):
 
         # 3. ROA 年增
         if all(k in current and k in previous for k in ['IncomeAfterTaxes']):
-            if all(k in current_bs and k in previous_bs for k in ['TotalAssets']):
-                roa_current = current['IncomeAfterTaxes'] / current_bs['TotalAssets'] if current_bs['TotalAssets'] > 0 else 0
-                roa_prev = previous['IncomeAfterTaxes'] / previous_bs['TotalAssets'] if previous_bs['TotalAssets'] > 0 else 0
+            if total_assets_current is not None and total_assets_prev is not None:
+                roa_current = current['IncomeAfterTaxes'] / total_assets_current if total_assets_current > 0 else 0
+                roa_prev = previous['IncomeAfterTaxes'] / total_assets_prev if total_assets_prev > 0 else 0
                 if roa_current > roa_prev:
                     score += 1
                 details['ROA年增'] = {'score': 1 if roa_current > roa_prev else 0}
@@ -1039,8 +1189,8 @@ def plot_revenue_profit_trends(income_df):
     if income_df is None or income_df.empty:
         return None
 
-    # 取最近8季數據
-    df = income_df.head(8).iloc[::-1].copy()
+    # 取最近8季數據（確保日期排序一致）
+    df = income_df.sort_values('date', ascending=False).head(8).copy().reset_index(drop=True).iloc[::-1]
 
     if 'date' not in df.columns or 'Revenue' not in df.columns:
         return None
@@ -1108,9 +1258,9 @@ def plot_profitability_trends(income_df, balance_df):
     if income_df is None or balance_df is None or income_df.empty or balance_df.empty:
         return None
 
-    # 取最近8季數據
-    income_recent = income_df.head(8).iloc[::-1].copy()
-    balance_recent = balance_df.head(8).iloc[::-1].copy()
+    # 取最近8季數據，統一排序
+    income_recent = income_df.sort_values('date', ascending=False).head(8).copy().reset_index(drop=True).iloc[::-1]
+    balance_recent = balance_df.sort_values('date', ascending=False).head(8).copy().reset_index(drop=True).iloc[::-1]
 
     # 合併數據
     merged = pd.merge(income_recent, balance_recent, on='date', how='inner')
@@ -1126,7 +1276,7 @@ def plot_profitability_trends(income_df, balance_df):
     for _, row in merged.iterrows():
         net_income = row.get('IncomeAfterTaxes', 0)
         equity = row.get('Equity', 0)
-        assets = row.get('Assets', 0)
+        assets = row.get('TotalAssets', row.get('Assets', 0))
 
         if equity and equity != 0:
             roe = (net_income / equity) * 100
@@ -1173,6 +1323,185 @@ def plot_profitability_trends(income_df, balance_df):
         hovermode='x unified',
         yaxis_title="百分比 (%)",
         xaxis_title="期間",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
+
+    return fig
+
+
+def plot_monthly_revenue_chart(revenue_df):
+    """
+    繪製月營收趨勢圖（含年增率）
+
+    參數:
+        revenue_df: 月營收 DataFrame
+
+    返回:
+        Plotly Figure 物件
+    """
+    if revenue_df is None or revenue_df.empty:
+        return None
+
+    fig = make_subplots(
+        rows=2, cols=1,
+        subplot_titles=('月營收趨勢', '年增率 (YoY%)'),
+        vertical_spacing=0.15,
+        row_heights=[0.6, 0.4]
+    )
+
+    # 月營收柱狀圖
+    fig.add_trace(go.Bar(
+        x=revenue_df['revenue_month'],
+        y=revenue_df['revenue'],
+        name='月營收',
+        marker_color='#2196f3',
+        text=revenue_df['revenue'].apply(lambda x: f'{x/1000:.1f}' if x >= 1000 else f'{x:.0f}'),
+        textposition='outside'
+    ), row=1, col=1)
+
+    # 年增率折線圖
+    colors = ['#66bb6a' if val >= 0 else '#ef5350' for val in revenue_df['yoy_growth'].fillna(0)]
+    fig.add_trace(go.Bar(
+        x=revenue_df['revenue_month'],
+        y=revenue_df['yoy_growth'],
+        name='年增率',
+        marker_color=colors,
+        text=revenue_df['yoy_growth'].apply(lambda x: f'{x:.1f}%' if pd.notna(x) else 'N/A'),
+        textposition='outside'
+    ), row=2, col=1)
+
+    fig.add_hline(y=0, line_dash="solid", line_color="gray", line_width=1, row=2, col=1)
+
+    fig.update_layout(
+        height=600,
+        template='plotly_white',
+        showlegend=False
+    )
+
+    fig.update_yaxes(title_text="營收 (千元)", row=1, col=1)
+    fig.update_yaxes(title_text="年增率 (%)", row=2, col=1)
+    fig.update_xaxes(title_text="月份", row=2, col=1)
+
+    return fig
+
+
+def plot_eps_trend_chart(eps_df):
+    """
+    繪製 EPS 趨勢圖（含季增、年增）
+
+    參數:
+        eps_df: EPS 趨勢 DataFrame
+
+    返回:
+        Plotly Figure 物件
+    """
+    if eps_df is None or eps_df.empty:
+        return None
+
+    fig = make_subplots(
+        rows=2, cols=1,
+        subplot_titles=('每股盈餘 (EPS)', 'EPS 成長率'),
+        vertical_spacing=0.15,
+        row_heights=[0.5, 0.5]
+    )
+
+    # EPS 柱狀圖
+    colors_eps = ['#66bb6a' if val >= 0 else '#ef5350' for val in eps_df['EPS']]
+    fig.add_trace(go.Bar(
+        x=eps_df['date'].dt.strftime('%Y-Q%q'),
+        y=eps_df['EPS'],
+        name='EPS',
+        marker_color=colors_eps,
+        text=eps_df['EPS'].apply(lambda x: f'{x:.2f}'),
+        textposition='outside'
+    ), row=1, col=1)
+
+    # 成長率折線圖
+    fig.add_trace(go.Scatter(
+        x=eps_df['date'].dt.strftime('%Y-Q%q'),
+        y=eps_df['QoQ'],
+        mode='lines+markers',
+        name='季增率 (QoQ)',
+        line=dict(color='#ff9800', width=2),
+        marker=dict(size=8)
+    ), row=2, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=eps_df['date'].dt.strftime('%Y-Q%q'),
+        y=eps_df['YoY'],
+        mode='lines+markers',
+        name='年增率 (YoY)',
+        line=dict(color='#9c27b0', width=2),
+        marker=dict(size=8)
+    ), row=2, col=1)
+
+    fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1, row=1, col=1)
+    fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1, row=2, col=1)
+
+    fig.update_layout(
+        height=550,
+        template='plotly_white',
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+
+    fig.update_yaxes(title_text="EPS (元)", row=1, col=1)
+    fig.update_yaxes(title_text="成長率 (%)", row=2, col=1)
+    fig.update_xaxes(title_text="季度", row=2, col=1)
+
+    return fig
+
+
+def plot_margin_comparison_chart(margin_df):
+    """
+    繪製毛利率與營益率比較圖
+
+    參數:
+        margin_df: 毛利率與營益率 DataFrame
+
+    返回:
+        Plotly Figure 物件
+    """
+    if margin_df is None or margin_df.empty:
+        return None
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=margin_df['date'].dt.strftime('%Y-Q%q'),
+        y=margin_df['毛利率'],
+        mode='lines+markers',
+        name='毛利率',
+        line=dict(color='#2196f3', width=3),
+        marker=dict(size=10),
+        text=margin_df['毛利率'].apply(lambda x: f'{x:.1f}%'),
+        textposition='top center'
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=margin_df['date'].dt.strftime('%Y-Q%q'),
+        y=margin_df['營益率'],
+        mode='lines+markers',
+        name='營益率',
+        line=dict(color='#ff9800', width=3),
+        marker=dict(size=10),
+        text=margin_df['營益率'].apply(lambda x: f'{x:.1f}%'),
+        textposition='bottom center'
+    ))
+
+    fig.update_layout(
+        title="毛利率與營益率趨勢比較（近4季）",
+        height=400,
+        template='plotly_white',
+        hovermode='x unified',
+        yaxis_title="百分比 (%)",
+        xaxis_title="季度",
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -1297,6 +1626,9 @@ def main():
             income_df = get_financial_statements(symbol, finmind_token)
             balance_df = get_balance_sheet(symbol, finmind_token)
 
+            # 新增數據：月營收
+            monthly_revenue_df = get_monthly_revenue(symbol, finmind_token)
+
         # === Tab 1: 技術分析 ===
         with tab1:
             if tech_data is not None:
@@ -1354,30 +1686,151 @@ def main():
         # === Tab 2: 基本面分析 ===
         with tab2:
             if income_df is not None and balance_df is not None:
-                # 財務比率
-                st.subheader("📊 關鍵財務比率")
+                # === 1. 月營收概況 ===
+                st.subheader("📅 營收概況與變化分析（近6個月）")
+                if monthly_revenue_df is not None and not monthly_revenue_df.empty:
+                    # 顯示最新月營收關鍵數據
+                    latest_rev = monthly_revenue_df.iloc[0]
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("最新月營收", f"{latest_rev['revenue']/1000:.1f} 億",
+                                 f"{latest_rev['mom_growth']:.1f}% MoM" if pd.notna(latest_rev['mom_growth']) else "N/A")
+                    with col2:
+                        yoy_val = latest_rev['yoy_growth'] if pd.notna(latest_rev['yoy_growth']) else 0
+                        st.metric("年增率 (YoY)", f"{yoy_val:.1f}%",
+                                 delta_color="normal" if yoy_val >= 0 else "inverse")
+                    with col3:
+                        period_str = str(latest_rev['revenue_month'])[:7] if 'revenue_month' in latest_rev else "N/A"
+                        st.metric("期間", period_str)
+
+                    # 月營收圖表
+                    fig_monthly_rev = plot_monthly_revenue_chart(monthly_revenue_df)
+                    if fig_monthly_rev:
+                        st.plotly_chart(fig_monthly_rev, use_container_width=True)
+                else:
+                    st.info("💡 無法獲取月營收數據")
+
+                st.divider()
+
+                # === 2. EPS 趨勢分析 ===
+                st.subheader("💎 每股盈餘（EPS）趨勢（近5季）")
+                eps_trend = calculate_eps_trend(income_df)
+                if eps_trend is not None and not eps_trend.empty:
+                    # 顯示最新 EPS
+                    latest_eps_row = eps_trend.iloc[0]
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("最新 EPS", f"{latest_eps_row['EPS']:.2f} 元")
+                    with col2:
+                        qoq_val = latest_eps_row['QoQ'] if pd.notna(latest_eps_row['QoQ']) else 0
+                        st.metric("季增率 (QoQ)", f"{qoq_val:.1f}%" if pd.notna(latest_eps_row['QoQ']) else "N/A")
+                    with col3:
+                        yoy_val = latest_eps_row['YoY'] if pd.notna(latest_eps_row['YoY']) else 0
+                        st.metric("年增率 (YoY)", f"{yoy_val:.1f}%" if pd.notna(latest_eps_row['YoY']) else "N/A")
+
+                    # EPS 圖表
+                    fig_eps = plot_eps_trend_chart(eps_trend)
+                    if fig_eps:
+                        st.plotly_chart(fig_eps, use_container_width=True)
+                else:
+                    st.info("💡 數據不足，無法計算 EPS 趨勢")
+
+                st.divider()
+
+                # === 3. 本益比與股價位階 ===
+                st.subheader("📈 本益比與歷史股價位階")
+                if tech_data is not None and income_df is not None:
+                    current_price = tech_data.iloc[-1]['close']
+                    latest_eps = income_df.iloc[0].get('EPS', 0) if 'EPS' in income_df.columns else 0
+                    pe_ratio = calculate_pe_ratio(current_price, latest_eps)
+
+                    # 計算歷史價格區間
+                    all_prices = stock_data['close'] if stock_data is not None else tech_data['close']
+                    price_high = all_prices.max()
+                    price_low = all_prices.min()
+                    price_avg = all_prices.mean()
+                    price_position = ((current_price - price_low) / (price_high - price_low)) * 100 if price_high != price_low else 50
+
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("目前股價", f"NT$ {current_price:.2f}")
+                    with col2:
+                        st.metric("本益比 (P/E)", f"{pe_ratio:.2f}" if pe_ratio else "N/A")
+                    with col3:
+                        st.metric("歷史高/低", f"{price_high:.2f} / {price_low:.2f}")
+                    with col4:
+                        position_text = "高位階" if price_position >= 70 else "低位階" if price_position <= 30 else "中位階"
+                        st.metric("價格位階", f"{price_position:.1f}% ({position_text})")
+
+                    # 估值評價
+                    if pe_ratio:
+                        if pe_ratio < 10:
+                            valuation = "🟢 可能低估"
+                        elif pe_ratio < 20:
+                            valuation = "🟡 合理區間"
+                        elif pe_ratio < 30:
+                            valuation = "🟠 偏高"
+                        else:
+                            valuation = "🔴 可能高估"
+                        st.info(f"估值評價: {valuation} (本益比: {pe_ratio:.2f})")
+                else:
+                    st.info("💡 數據不足，無法計算本益比")
+
+                st.divider()
+
+                # === 4. 毛利率與營益率趨勢 ===
+                st.subheader("📊 毛利率與營益率變化趨勢（近4季）")
+                margin_trend = calculate_margin_trends(income_df)
+                if margin_trend is not None and not margin_trend.empty:
+                    # 顯示最新數據
+                    latest_margin = margin_trend.iloc[-1]
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("最新毛利率", f"{latest_margin['毛利率']:.2f}%")
+                    with col2:
+                        st.metric("最新營益率", f"{latest_margin['營益率']:.2f}%")
+
+                    # 毛利率營益率圖表
+                    fig_margin = plot_margin_comparison_chart(margin_trend)
+                    if fig_margin:
+                        st.plotly_chart(fig_margin, use_container_width=True)
+                else:
+                    st.info("💡 數據不足，無法計算毛利率與營益率趨勢")
+
+                st.divider()
+
+                # === 5. 財務健全度（ROE、ROA）===
+                st.subheader("💪 財務健全度分析")
                 ratios = calculate_financial_ratios(income_df, balance_df)
                 if ratios:
                     col1, col2, col3, col4 = st.columns(4)
-                    items = list(ratios.items())
-                    for i, col in enumerate([col1, col2, col3, col4]):
-                        if i < len(items):
-                            with col:
-                                key, val = items[i]
-                                if isinstance(val, float):
-                                    display_val = f"{val:.2f}%" if key not in ['EPS', '流動比率'] else f"{val:.2f}"
-                                else:
-                                    display_val = str(val)
-                                st.metric(key, display_val)
+                    with col1:
+                        roe = ratios.get('ROE', 0)
+                        st.metric("ROE (股東權益報酬率)", f"{roe:.2f}%")
+                    with col2:
+                        roa = ratios.get('ROA', 0)
+                        st.metric("ROA (資產報酬率)", f"{roa:.2f}%")
+                    with col3:
+                        current_ratio = ratios.get('流動比率', 0)
+                        st.metric("流動比率", f"{current_ratio:.2f}")
+                    with col4:
+                        debt_ratio = ratios.get('負債比率', 0)
+                        st.metric("負債比率", f"{debt_ratio:.2f}%")
 
-                    # 財務比率視覺化圖表
-                    st.subheader("📊 財務比率視覺化")
+                    # 財務比率視覺化
                     fig_ratios = plot_financial_ratios_bar(ratios)
                     if fig_ratios:
                         st.plotly_chart(fig_ratios, use_container_width=True)
 
-                # Piotroski F-Score
-                st.subheader("🎯 Piotroski F-Score 分析")
+                    # ROE/ROA 趨勢圖
+                    fig_profitability = plot_profitability_trends(income_df, balance_df)
+                    if fig_profitability:
+                        st.plotly_chart(fig_profitability, use_container_width=True)
+
+                st.divider()
+
+                # === 6. F-Score 分析 ===
+                st.subheader("🎯 Piotroski F-Score 財務體質評分")
                 fscore = calculate_piotroski_fscore(income_df, balance_df)
                 if fscore:
                     col1, col2 = st.columns([1, 2])
@@ -1385,11 +1838,11 @@ def main():
                         score = fscore['total_score']
                         st.metric("F-Score 總分", f"{score}/9")
                         if score >= 7:
-                            st.success("✅ 優秀 (≥7)")
+                            st.success("✅ 財務體質優秀 (≥7)")
                         elif score >= 5:
-                            st.info("ℹ️ 良好 (5-6)")
+                            st.info("ℹ️ 財務體質良好 (5-6)")
                         else:
-                            st.warning("⚠️ 需關注 (<5)")
+                            st.warning("⚠️ 財務體質需關注 (<5)")
 
                         # F-Score 儀表盤
                         fig_fscore = plot_fscore_gauge(fscore)
@@ -1402,29 +1855,21 @@ def main():
                             status = "✅" if data.get('score') == 1 else "❌"
                             st.write(f"{status} {metric}: {data}")
 
-                # 獲利能力趨勢
-                st.subheader("📈 獲利能力趨勢")
-                fig_profitability = plot_profitability_trends(income_df, balance_df)
-                if fig_profitability:
-                    st.plotly_chart(fig_profitability, use_container_width=True)
-                else:
-                    st.info("💡 數據不足，無法繪製獲利能力趨勢圖")
+                st.divider()
 
-                # 營收與淨利趨勢
-                st.subheader("💰 營收與淨利趨勢")
-                fig_revenue = plot_revenue_profit_trends(income_df)
-                if fig_revenue:
-                    st.plotly_chart(fig_revenue, use_container_width=True)
-                else:
-                    st.info("💡 數據不足，無法繪製營收與淨利趨勢圖")
-
-                # 最近財報數據
-                st.subheader("📋 最近財報數據")
-                if len(income_df) >= 3:
+                # === 7. 最近財報數據表格（4季）===
+                st.subheader("📋 最近財報數據（近4季）")
+                if len(income_df) >= 4:
                     cols_to_show = ['date', 'Revenue', 'GrossProfit', 'OperatingIncome', 'IncomeAfterTaxes', 'EPS']
                     available_cols = ['date'] + [c for c in cols_to_show[1:] if c in income_df.columns]
-                    display_df = income_df.head(3)[available_cols].copy()
-                    display_df['date'] = display_df['date'].dt.strftime('%Y-%m')
+                    display_df = income_df.head(4)[available_cols].copy()
+                    display_df['date'] = display_df['date'].dt.strftime('%Y-Q%q')
+
+                    # 格式化數值
+                    for col in display_df.columns:
+                        if col != 'date' and col in display_df.columns:
+                            display_df[col] = display_df[col].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "N/A")
+
                     st.dataframe(display_df, use_container_width=True, hide_index=True)
             else:
                 st.warning("⚠️ 無法獲取完整財務數據")
