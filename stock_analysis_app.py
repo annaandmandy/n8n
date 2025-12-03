@@ -195,6 +195,102 @@ def get_rsi_status(rsi_value):
         return "正常", "blue"
 
 
+def calculate_kd(df, n=9, m1=3, m2=3):
+    """
+    計算 KD 指標 (隨機指標)
+
+    參數:
+        df: 包含 high, low, close 的 DataFrame
+        n: RSV 計算週期，預設 9
+        m1: K 值平滑參數，預設 3
+        m2: D 值平滑參數，預設 3
+
+    返回:
+        DataFrame: 添加了 K, D 指標的 DataFrame
+    """
+    if df is None or df.empty:
+        return None
+
+    df = df.copy()
+
+    # 計算 RSV (未成熟隨機值)
+    low_min = df['low'].rolling(window=n, min_periods=n).min()
+    high_max = df['high'].rolling(window=n, min_periods=n).max()
+
+    df['RSV'] = 100 * (df['close'] - low_min) / (high_max - low_min)
+
+    # 計算 K 值 (RSV 的移動平均)
+    df['K'] = df['RSV'].ewm(span=m1, adjust=False).mean()
+
+    # 計算 D 值 (K 值的移動平均)
+    df['D'] = df['K'].ewm(span=m2, adjust=False).mean()
+
+    return df
+
+
+def calculate_macd(df, fast=12, slow=26, signal=9):
+    """
+    計算 MACD 指標 (指數平滑異同移動平均線)
+
+    參數:
+        df: 包含收盤價的 DataFrame
+        fast: 快速 EMA 週期，預設 12
+        slow: 慢速 EMA 週期，預設 26
+        signal: 信號線週期，預設 9
+
+    返回:
+        DataFrame: 添加了 MACD, Signal, Histogram 的 DataFrame
+    """
+    if df is None or df.empty:
+        return None
+
+    df = df.copy()
+
+    # 計算快速和慢速 EMA
+    ema_fast = df['close'].ewm(span=fast, adjust=False).mean()
+    ema_slow = df['close'].ewm(span=slow, adjust=False).mean()
+
+    # MACD 線 = 快速 EMA - 慢速 EMA
+    df['MACD'] = ema_fast - ema_slow
+
+    # 信號線 = MACD 的 EMA
+    df['MACD_Signal'] = df['MACD'].ewm(span=signal, adjust=False).mean()
+
+    # 柱狀圖 = MACD - 信號線
+    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+
+    return df
+
+
+def calculate_willr(df, period=14):
+    """
+    計算威廉指標 (Williams %R)
+
+    參數:
+        df: 包含 high, low, close 的 DataFrame
+        period: 計算週期，預設 14
+
+    返回:
+        DataFrame: 添加了 WillR 指標的 DataFrame
+
+    威廉指標公式:
+    %R = -100 * (最高價 - 收盤價) / (最高價 - 最低價)
+    """
+    if df is None or df.empty:
+        return None
+
+    df = df.copy()
+
+    # 計算週期內的最高價和最低價
+    high_max = df['high'].rolling(window=period, min_periods=period).max()
+    low_min = df['low'].rolling(window=period, min_periods=period).min()
+
+    # 計算威廉指標
+    df['WillR'] = -100 * (high_max - df['close']) / (high_max - low_min)
+
+    return df
+
+
 # ==================== 財務分析函數 ====================
 
 def get_financial_statements(symbol, token=""):
@@ -384,13 +480,21 @@ def generate_ai_insights(symbol, stock_data, start_price, end_price, price_chang
         # 初始化 OpenAI 客戶端
         client = OpenAI(api_key=openai_api_key)
 
-        # 準備數據 - 轉換為 JSON 格式（包含 RSI）
-        data_for_ai = stock_data[['date', 'open', 'high', 'low', 'close', 'volume', 'MA5', 'MA10', 'MA20', 'MA60', 'RSI']].copy()
+        # 準備數據 - 轉換為 JSON 格式（包含所有技術指標）
+        data_for_ai = stock_data[['date', 'open', 'high', 'low', 'close', 'volume',
+                                    'MA5', 'MA10', 'MA20', 'MA60',
+                                    'RSI', 'K', 'D', 'MACD', 'MACD_Signal', 'MACD_Hist', 'WillR']].copy()
         data_for_ai['date'] = data_for_ai['date'].dt.strftime('%Y-%m-%d')
-        data_json = data_for_ai.to_json(orient='records', indent=2, force_ascii=False)
+        data_json = data_for_ai.tail(10).to_json(orient='records', indent=2, force_ascii=False)
 
-        # 獲取最新 RSI 值
+        # 獲取最新指標值
         latest_rsi = stock_data['RSI'].iloc[-1] if not pd.isna(stock_data['RSI'].iloc[-1]) else None
+        latest_k = stock_data['K'].iloc[-1] if not pd.isna(stock_data['K'].iloc[-1]) else None
+        latest_d = stock_data['D'].iloc[-1] if not pd.isna(stock_data['D'].iloc[-1]) else None
+        latest_macd = stock_data['MACD'].iloc[-1] if not pd.isna(stock_data['MACD'].iloc[-1]) else None
+        latest_macd_signal = stock_data['MACD_Signal'].iloc[-1] if not pd.isna(stock_data['MACD_Signal'].iloc[-1]) else None
+        latest_willr = stock_data['WillR'].iloc[-1] if not pd.isna(stock_data['WillR'].iloc[-1]) else None
+
         rsi_status, _ = get_rsi_status(latest_rsi)
 
         # 準備財務數據資訊
@@ -436,54 +540,126 @@ def generate_ai_insights(symbol, stock_data, start_price, end_price, price_chang
 
 免責聲明:所提供的分析內容純粹基於歷史數據的解讀,僅供教育和研究參考,不構成任何投資建議或未來走勢預測。歷史表現不代表未來結果。"""
 
-        # 用戶提示語
-        rsi_info = f"- 最新 RSI 值: {latest_rsi:.2f} (狀態: {rsi_status})" if latest_rsi else "- RSI 數據: 數據不足"
+        # 用戶提示語 - 準備所有指標的當前狀態
+        indicators_info = f"""
+**當前技術指標狀態:**
+- RSI: {latest_rsi:.2f} ({rsi_status}) {f'- RSI > 70 超買' if latest_rsi and latest_rsi >= 70 else f'- RSI < 30 超賣' if latest_rsi and latest_rsi <= 30 else ''}
+- KD 指標: K值 {latest_k:.2f}, D值 {latest_d:.2f} {f'- K > D 多頭' if latest_k and latest_d and latest_k > latest_d else '- K < D 空頭' if latest_k and latest_d else ''}
+- MACD: {latest_macd:.4f}, Signal: {latest_macd_signal:.4f} {f'- MACD > Signal 多頭' if latest_macd and latest_macd_signal and latest_macd > latest_macd_signal else '- MACD < Signal 空頭' if latest_macd and latest_macd_signal else ''}
+- 威廉指標: {latest_willr:.2f} {f'- 超買區域' if latest_willr and latest_willr > -20 else f'- 超賣區域' if latest_willr and latest_willr < -80 else ''}
+"""
 
-        user_prompt = f"""請基於以下數據進行綜合分析:
+        user_prompt = f"""您是資深股票分析師，請根據以下數據進行**詳細專業的綜合分析**:
 
-### 基本資訊
-- 股票代號:{symbol}
-- 分析期間:{first_date} 至 {last_date}
-- 期間價格變化:{price_change:.2f}% (從 NT${start_price:.2f} 變化到 NT${end_price:.2f})
-{rsi_info}
+### 📊 基本資訊
+- 股票代號: {symbol}
+- 分析期間: {first_date} 至 {last_date}
+- 期間價格變化: {price_change:.2f}% (從 NT${start_price:.2f} → NT${end_price:.2f})
+- 當前價位: NT${end_price:.2f}
 
-### 技術分析數據
-以下是該期間的交易數據 (最近10筆):
+{indicators_info}
+
+### 📈 技術分析數據 (最近10筆完整數據)
 {data_json}
 
-### 基本面分析數據
+### 💰 基本面分析數據
 {fundamental_info if fundamental_info else '基本面數據不足'}
 
-### 分析架構:綜合分析
+---
 
-#### 1. 技術面分析
-- 價格趨勢方向和強度
-- 移動平均線排列和支撐壓力
-- RSI 狀態和動量評估
-- 成交量與價格的關聯性
+## 🎯 請按照以下架構進行**詳細分析**:
 
-#### 2. 基本面分析 (如有數據)
-- F-Score 各項指標解讀
-- 財務比率評估 (ROE, ROA, 毛利率等)
-- 企業獲利能力和財務健康度
+### 1. 目前位階分析
+- 當前價格在歷史區間的位置 (高點/低點/中間)
+- 相對於各均線的位置關係
+- 價格所處的關鍵支撐/壓力區間
 
-#### 3. 技術面與基本面整合
-- 兩者是否呈現協同或背離
+### 2. 量價關係分析
+- 成交量與價格變動的配合度
+- 是否出現價漲量增、價跌量縮等健康型態
+- 異常成交量的時間點和意義
+
+### 3. 技術指標詳細解讀
+
+#### 3.1 KD 指標分析
+- K值與D值的當前數值和交叉狀態
+- 是否處於超買(>80)或超賣(<20)區域
+- 鈍化現象的判斷
+- KD 指標給出的訊號
+
+#### 3.2 MACD 指標分析
+- MACD 與 Signal 線的相對位置
+- 柱狀圖(Histogram)的變化趨勢
+- 是否出現黃金交叉或死亡交叉
+- MACD 背離現象的觀察
+
+#### 3.3 威廉指標分析
+- 當前 %R 值的位置
+- 超買超賣狀態判斷
+- 與價格的配合度
+
+#### 3.4 RSI 指標分析
+- RSI 的當前數值和趨勢
+- 超買超賣判斷
+- RSI 背離的觀察
+
+### 4. 型態分析
+- K線組合型態 (如紅三兵、黑三鴉、十字星等)
+- 是否形成重要的反轉或延續型態
+- 缺口的觀察
+
+### 5. 支撐與壓力分析
+- **關鍵支撐位**: 列出3個重要支撐價位並說明理由
+- **關鍵壓力位**: 列出3個重要壓力價位並說明理由
+- 支撐壓力的強弱程度評估
+
+### 6. 趨勢判斷
+- **短期趨勢** (5-10日): 多頭/空頭/盤整
+- **中期趨勢** (20-60日): 多頭/空頭/盤整
+- **長期趨勢** (>60日): 多頭/空頭/盤整
+- 各週期趨勢的一致性分析
+
+### 7. 基本面與技術面整合 (如有財務數據)
+- 技術面與基本面是否協同
 - 價格表現與財務狀況的一致性
-- 綜合風險評估
+- 綜合評估
 
-#### 4. 歷史數據觀察
-- 短期技術面表現
-- 財務數據趨勢 (如有)
-- 需注意的風險因子
+### 8. ⚠️ 風險評估
+- 當前主要風險因子
+- 需注意的警訊
+- 風險等級評估 (高/中/低)
 
-### 輸出要求
-- 條理清晰,分段論述
-- 提供具體的數據支撐
-- 避免過於絕對的預測
-- 強調分析的局限性
+---
 
-分析目標:{symbol}"""
+## 💡 操作建議 (僅供參考)
+
+### 短期操作建議 (1-5個交易日)
+- **操作方向**: 偏多/偏空/觀望
+- **進場參考價位**: NT$ XXX - XXX
+- **停損參考價位**: NT$ XXX (下跌X%)
+- **停利參考價位**: NT$ XXX (上漲X%)
+- **依據**: 基於XXX指標顯示...
+
+### 中期操作建議 (1-4週)
+- **操作方向**: 偏多/偏空/觀望
+- **目標價位區間**: NT$ XXX - XXX
+- **停損參考**: NT$ XXX
+- **依據**: 基於XXX趨勢...
+
+### 長期投資建議 (1個月以上)
+- **投資價值評估**: 適合/不適合長期持有
+- **目標價位**: NT$ XXX
+- **依據**: 結合基本面和技術面...
+
+---
+
+**重要聲明**:
+- 以上分析純粹基於歷史數據的技術分析，僅供參考學習
+- 所有價位和建議都是基於當前數據的參考值，非投資建議
+- 歷史表現不代表未來結果
+- 投資人應自行判斷並承擔投資風險
+
+請提供專業、詳細且結構化的分析報告。"""
 
         # 調用 OpenAI API
         with st.spinner("🤖 AI 正在分析中..."):
@@ -505,10 +681,10 @@ def generate_ai_insights(symbol, stock_data, start_price, end_price, price_chang
 
 def plot_advanced_chart(df, symbol):
     """
-    繪製進階圖表：K 線圖 + 移動平均線 + RSI + 成交量
+    繪製進階圖表：K 線圖 + 移動平均線 + 多種技術指標
 
     參數:
-        df: 包含股票數據、移動平均線和 RSI 的 DataFrame
+        df: 包含股票數據和所有技術指標的 DataFrame
         symbol: 股票代碼
 
     返回:
@@ -517,13 +693,20 @@ def plot_advanced_chart(df, symbol):
     if df is None or df.empty:
         return None
 
-    # 創建子圖表：3 個子圖（K線+MA、RSI、成交量）
+    # 創建子圖表：6 個子圖（K線+MA、RSI、KD、MACD、威廉指標、成交量）
     fig = make_subplots(
-        rows=3, cols=1,
+        rows=6, cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.05,
-        row_heights=[0.5, 0.25, 0.25],
-        subplot_titles=(f'{symbol} 股價 K 線圖與技術指標', 'RSI 相對強弱指標', '成交量')
+        vertical_spacing=0.03,
+        row_heights=[0.35, 0.13, 0.13, 0.13, 0.13, 0.13],
+        subplot_titles=(
+            f'{symbol} 股價 K 線圖與技術指標',
+            'RSI 相對強弱指標',
+            'KD 隨機指標',
+            'MACD 指標',
+            '威廉指標 %R',
+            '成交量'
+        )
     )
 
     # ========== 第一排：K 線圖和移動平均線 ==========
@@ -610,7 +793,61 @@ def plot_advanced_chart(df, symbol):
         row=2, col=1
     )
 
-    # ========== 第三排：成交量 ==========
+    # ========== 第三排：KD 指標 ==========
+    fig.add_trace(go.Scatter(
+        x=df['date'], y=df['K'],
+        mode='lines', name='K值',
+        line=dict(color='#FF6B6B', width=2)
+    ), row=3, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=df['date'], y=df['D'],
+        mode='lines', name='D值',
+        line=dict(color='#4ECDC4', width=2)
+    ), row=3, col=1)
+
+    # KD 超買超賣線
+    fig.add_hline(y=80, line_dash="dash", line_color="red", annotation_text="超買 (80)", row=3, col=1)
+    fig.add_hline(y=20, line_dash="dash", line_color="green", annotation_text="超賣 (20)", row=3, col=1)
+
+    # ========== 第四排：MACD 指標 ==========
+    fig.add_trace(go.Scatter(
+        x=df['date'], y=df['MACD'],
+        mode='lines', name='MACD',
+        line=dict(color='#2E86DE', width=2)
+    ), row=4, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=df['date'], y=df['MACD_Signal'],
+        mode='lines', name='Signal',
+        line=dict(color='#FFA07A', width=2)
+    ), row=4, col=1)
+
+    # MACD 柱狀圖
+    colors_macd = ['#ef5350' if val >= 0 else '#26a69a' for val in df['MACD_Hist']]
+    fig.add_trace(go.Bar(
+        x=df['date'], y=df['MACD_Hist'],
+        name='MACD Hist',
+        marker_color=colors_macd,
+        showlegend=False
+    ), row=4, col=1)
+
+    fig.add_hline(y=0, line_dash="solid", line_color="gray", line_width=1, row=4, col=1)
+
+    # ========== 第五排：威廉指標 ==========
+    fig.add_trace(go.Scatter(
+        x=df['date'], y=df['WillR'],
+        mode='lines', name='Williams %R',
+        line=dict(color='#9B59B6', width=2)
+    ), row=5, col=1)
+
+    # 威廉指標參考線
+    fig.add_hline(y=-20, line_dash="dash", line_color="red", annotation_text="超買 (-20)", row=5, col=1)
+    fig.add_hline(y=-80, line_dash="dash", line_color="green", annotation_text="超賣 (-80)", row=5, col=1)
+    fig.add_hrect(y0=-20, y1=0, fillcolor="red", opacity=0.1, layer="below", line_width=0, row=5, col=1)
+    fig.add_hrect(y0=-100, y1=-80, fillcolor="green", opacity=0.1, layer="below", line_width=0, row=5, col=1)
+
+    # ========== 第六排：成交量 ==========
     colors = ['#ef5350' if df['close'].iloc[i] >= df['open'].iloc[i] else '#26a69a'
               for i in range(len(df))]  # 紅色 = 上漲, 綠色 = 下跌 (台股習慣)
 
@@ -619,18 +856,18 @@ def plot_advanced_chart(df, symbol):
         name='成交量',
         marker_color=colors,
         showlegend=False
-    ), row=3, col=1)
+    ), row=6, col=1)
 
     # 更新布局
     fig.update_layout(
-        height=900,
+        height=1400,  # 增加高度以容納更多子圖
         template='plotly_white',
         hovermode='x unified',
         showlegend=True,
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.02,
+            y=1.01,
             xanchor="right",
             x=1
         )
@@ -639,11 +876,311 @@ def plot_advanced_chart(df, symbol):
     # 更新 Y 軸標籤
     fig.update_yaxes(title_text="價格 (TWD)", row=1, col=1)
     fig.update_yaxes(title_text="RSI", range=[0, 100], row=2, col=1)
-    fig.update_yaxes(title_text="成交量", row=3, col=1)
-    fig.update_xaxes(title_text="日期", row=3, col=1)
+    fig.update_yaxes(title_text="KD 值", range=[0, 100], row=3, col=1)
+    fig.update_yaxes(title_text="MACD", row=4, col=1)
+    fig.update_yaxes(title_text="%R", range=[-100, 0], row=5, col=1)
+    fig.update_yaxes(title_text="成交量", row=6, col=1)
+    fig.update_xaxes(title_text="日期", row=6, col=1)
 
     # 隱藏 K 線圖的 rangeslider
     fig.update_xaxes(rangeslider_visible=False, row=1, col=1)
+
+    return fig
+
+
+# ==================== 基本面視覺化圖表函數 ====================
+
+def plot_fscore_gauge(fscore_data):
+    """
+    繪製 F-Score 儀表盤圖
+
+    參數:
+        fscore_data: F-Score 數據 (包含 total_score)
+
+    返回:
+        Plotly Figure 物件
+    """
+    if not fscore_data:
+        return None
+
+    score = fscore_data['total_score']
+
+    # 創建儀表盤圖
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number+delta",
+        value=score,
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={'text': "Piotroski F-Score", 'font': {'size': 24}},
+        delta={'reference': 5, 'increasing': {'color': "green"}, 'decreasing': {'color': "red"}},
+        gauge={
+            'axis': {'range': [None, 9], 'tickwidth': 1, 'tickcolor': "darkblue"},
+            'bar': {'color': "darkblue"},
+            'bgcolor': "white",
+            'borderwidth': 2,
+            'bordercolor': "gray",
+            'steps': [
+                {'range': [0, 4], 'color': '#ffcccc'},
+                {'range': [4, 7], 'color': '#fff9cc'},
+                {'range': [7, 9], 'color': '#ccffcc'}
+            ],
+            'threshold': {
+                'line': {'color': "red", 'width': 4},
+                'thickness': 0.75,
+                'value': 7
+            }
+        }
+    ))
+
+    fig.update_layout(
+        height=300,
+        margin=dict(l=20, r=20, t=60, b=20)
+    )
+
+    return fig
+
+
+def plot_financial_ratios_bar(ratios):
+    """
+    繪製財務比率橫條圖
+
+    參數:
+        ratios: 財務比率字典 (來自 calculate_financial_ratios)
+
+    返回:
+        Plotly Figure 物件
+    """
+    if not ratios:
+        return None
+
+    # 分類指標
+    profitability_metrics = {}
+    financial_health_metrics = {}
+
+    for key, val in ratios.items():
+        if isinstance(val, (int, float)):
+            if key in ['ROE (%)', 'ROA (%)', '毛利率 (%)', '淨利率 (%)']:
+                profitability_metrics[key] = val
+            elif key in ['流動比率', '負債比率 (%)']:
+                financial_health_metrics[key] = val
+
+    # 創建子圖
+    from plotly.subplots import make_subplots
+
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=('獲利能力指標', '財務健康指標'),
+        specs=[[{"type": "bar"}, {"type": "bar"}]]
+    )
+
+    # 獲利能力指標
+    if profitability_metrics:
+        metrics = list(profitability_metrics.keys())
+        values = list(profitability_metrics.values())
+        colors = ['#66bb6a' if v > 0 else '#ef5350' for v in values]
+
+        fig.add_trace(go.Bar(
+            y=metrics,
+            x=values,
+            orientation='h',
+            marker_color=colors,
+            text=[f"{v:.2f}%" for v in values],
+            textposition='outside',
+            showlegend=False
+        ), row=1, col=1)
+
+    # 財務健康指標
+    if financial_health_metrics:
+        metrics = list(financial_health_metrics.keys())
+        values = list(financial_health_metrics.values())
+
+        # 流動比率 > 1 為好, 負債比率 < 50 為好
+        colors = []
+        for k, v in zip(metrics, values):
+            if '流動比率' in k:
+                colors.append('#66bb6a' if v > 1 else '#ef5350')
+            elif '負債比率' in k:
+                colors.append('#66bb6a' if v < 50 else '#ef5350')
+            else:
+                colors.append('#2196f3')
+
+        fig.add_trace(go.Bar(
+            y=metrics,
+            x=values,
+            orientation='h',
+            marker_color=colors,
+            text=[f"{v:.2f}%" if '%' in k else f"{v:.2f}" for k, v in zip(metrics, values)],
+            textposition='outside',
+            showlegend=False
+        ), row=1, col=2)
+
+    fig.update_layout(
+        height=300,
+        showlegend=False,
+        template='plotly_white',
+        margin=dict(l=20, r=20, t=60, b=20)
+    )
+
+    fig.update_xaxes(title_text="百分比 (%)", row=1, col=1)
+    fig.update_xaxes(title_text="數值", row=1, col=2)
+
+    return fig
+
+
+def plot_revenue_profit_trends(income_df):
+    """
+    繪製營收與淨利趨勢圖
+
+    參數:
+        income_df: 損益表 DataFrame
+
+    返回:
+        Plotly Figure 物件
+    """
+    if income_df is None or income_df.empty:
+        return None
+
+    # 取最近8季數據
+    df = income_df.head(8).iloc[::-1].copy()
+
+    if 'date' not in df.columns or 'Revenue' not in df.columns:
+        return None
+
+    # 創建雙軸圖表
+    from plotly.subplots import make_subplots
+
+    fig = make_subplots(
+        rows=2, cols=1,
+        subplot_titles=('營收趨勢', '淨利趨勢'),
+        vertical_spacing=0.12,
+        row_heights=[0.5, 0.5]
+    )
+
+    # 營收趨勢
+    if 'Revenue' in df.columns:
+        fig.add_trace(go.Scatter(
+            x=df['date'].dt.strftime('%Y-%m'),
+            y=df['Revenue'],
+            mode='lines+markers',
+            name='營收',
+            line=dict(color='#2196f3', width=3),
+            marker=dict(size=8),
+            fill='tozeroy',
+            fillcolor='rgba(33, 150, 243, 0.1)'
+        ), row=1, col=1)
+
+    # 淨利趨勢
+    if 'IncomeAfterTaxes' in df.columns:
+        colors = ['#66bb6a' if val >= 0 else '#ef5350' for val in df['IncomeAfterTaxes']]
+
+        fig.add_trace(go.Bar(
+            x=df['date'].dt.strftime('%Y-%m'),
+            y=df['IncomeAfterTaxes'],
+            name='稅後淨利',
+            marker_color=colors,
+            showlegend=False
+        ), row=2, col=1)
+
+    fig.update_layout(
+        height=500,
+        template='plotly_white',
+        showlegend=True,
+        hovermode='x unified'
+    )
+
+    fig.update_yaxes(title_text="營收 (千元)", row=1, col=1)
+    fig.update_yaxes(title_text="淨利 (千元)", row=2, col=1)
+    fig.update_xaxes(title_text="期間", row=2, col=1)
+
+    return fig
+
+
+def plot_profitability_trends(income_df, balance_df):
+    """
+    繪製 ROE 和 ROA 趨勢圖
+
+    參數:
+        income_df: 損益表 DataFrame
+        balance_df: 資產負債表 DataFrame
+
+    返回:
+        Plotly Figure 物件
+    """
+    if income_df is None or balance_df is None or income_df.empty or balance_df.empty:
+        return None
+
+    # 取最近8季數據
+    income_recent = income_df.head(8).iloc[::-1].copy()
+    balance_recent = balance_df.head(8).iloc[::-1].copy()
+
+    # 合併數據
+    merged = pd.merge(income_recent, balance_recent, on='date', how='inner')
+
+    if merged.empty:
+        return None
+
+    # 計算 ROE 和 ROA
+    roe_list = []
+    roa_list = []
+    dates = []
+
+    for _, row in merged.iterrows():
+        net_income = row.get('IncomeAfterTaxes', 0)
+        equity = row.get('Equity', 0)
+        assets = row.get('Assets', 0)
+
+        if equity and equity != 0:
+            roe = (net_income / equity) * 100
+            roe_list.append(roe)
+        else:
+            roe_list.append(None)
+
+        if assets and assets != 0:
+            roa = (net_income / assets) * 100
+            roa_list.append(roa)
+        else:
+            roa_list.append(None)
+
+        dates.append(row['date'])
+
+    # 創建圖表
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=[d.strftime('%Y-%m') for d in dates],
+        y=roe_list,
+        mode='lines+markers',
+        name='ROE (%)',
+        line=dict(color='#ff9800', width=3),
+        marker=dict(size=8)
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=[d.strftime('%Y-%m') for d in dates],
+        y=roa_list,
+        mode='lines+markers',
+        name='ROA (%)',
+        line=dict(color='#9c27b0', width=3),
+        marker=dict(size=8)
+    ))
+
+    # 添加零線
+    fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1)
+
+    fig.update_layout(
+        title="獲利能力趨勢 (ROE & ROA)",
+        height=350,
+        template='plotly_white',
+        hovermode='x unified',
+        yaxis_title="百分比 (%)",
+        xaxis_title="期間",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
 
     return fig
 
@@ -747,8 +1284,12 @@ def main():
             if stock_data is not None:
                 filtered_data = filter_by_date_range(stock_data, start_date, end_date)
                 if filtered_data is not None:
+                    # 計算所有技術指標
                     data_with_ma = get_moving_averages(filtered_data)
-                    tech_data = calculate_rsi(data_with_ma, period=rsi_period)
+                    data_with_rsi = calculate_rsi(data_with_ma, period=rsi_period)
+                    data_with_kd = calculate_kd(data_with_rsi)
+                    data_with_macd = calculate_macd(data_with_kd)
+                    tech_data = calculate_willr(data_with_macd)
             else:
                 tech_data = None
 
@@ -829,6 +1370,12 @@ def main():
                                     display_val = str(val)
                                 st.metric(key, display_val)
 
+                    # 財務比率視覺化圖表
+                    st.subheader("📊 財務比率視覺化")
+                    fig_ratios = plot_financial_ratios_bar(ratios)
+                    if fig_ratios:
+                        st.plotly_chart(fig_ratios, use_container_width=True)
+
                 # Piotroski F-Score
                 st.subheader("🎯 Piotroski F-Score 分析")
                 fscore = calculate_piotroski_fscore(income_df, balance_df)
@@ -843,11 +1390,33 @@ def main():
                             st.info("ℹ️ 良好 (5-6)")
                         else:
                             st.warning("⚠️ 需關注 (<5)")
+
+                        # F-Score 儀表盤
+                        fig_fscore = plot_fscore_gauge(fscore)
+                        if fig_fscore:
+                            st.plotly_chart(fig_fscore, use_container_width=True)
+
                     with col2:
                         st.write("**評分詳情:**")
                         for metric, data in fscore['details'].items():
                             status = "✅" if data.get('score') == 1 else "❌"
                             st.write(f"{status} {metric}: {data}")
+
+                # 獲利能力趨勢
+                st.subheader("📈 獲利能力趨勢")
+                fig_profitability = plot_profitability_trends(income_df, balance_df)
+                if fig_profitability:
+                    st.plotly_chart(fig_profitability, use_container_width=True)
+                else:
+                    st.info("💡 數據不足，無法繪製獲利能力趨勢圖")
+
+                # 營收與淨利趨勢
+                st.subheader("💰 營收與淨利趨勢")
+                fig_revenue = plot_revenue_profit_trends(income_df)
+                if fig_revenue:
+                    st.plotly_chart(fig_revenue, use_container_width=True)
+                else:
+                    st.info("💡 數據不足，無法繪製營收與淨利趨勢圖")
 
                 # 最近財報數據
                 st.subheader("📋 最近財報數據")
