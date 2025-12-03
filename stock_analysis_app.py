@@ -466,8 +466,6 @@ def get_monthly_revenue(symbol, token=""):
 
         df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
 
-        # 檢查數據結構
-        st.info(f"📊 月營收數據筆數: {len(df)} | 欄位: {list(df.columns)}")
 
         df['revenue_date'] = pd.to_datetime(df['revenue_month'])
         df = df.sort_values('revenue_date', ascending=False).reset_index(drop=True)
@@ -1637,10 +1635,6 @@ def main():
         with st.spinner("📊 正在獲取數據..."):
             # 技術數據
             stock_data = get_stock_data(symbol, finmind_token)
-            if stock_data is not None:
-                st.info(f"get_stock_data 回傳筆數: {len(stock_data)}, 欄位: {list(stock_data.columns)}")
-            else:
-                st.info("get_stock_data 回傳 None")
             if stock_data is not None:
                 filtered_data = filter_by_date_range(stock_data, start_date, end_date)
                 if filtered_data is not None:
