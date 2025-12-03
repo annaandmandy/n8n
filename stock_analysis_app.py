@@ -22,12 +22,13 @@ st.set_page_config(
 
 # ==================== 核心函數 ====================
 
-def get_stock_data(symbol):
+def get_stock_data(symbol, token=""):
     """
     從 FinMind API 獲取台股歷史數據
 
     參數:
         symbol: 股票代碼 (台股代碼，例如: 2330)
+        token: FinMind API Token (可選)
 
     返回:
         DataFrame: 包含歷史價格數據的 DataFrame
@@ -40,7 +41,7 @@ def get_stock_data(symbol):
             "dataset": "TaiwanStockPrice",
             "data_id": symbol,
             "start_date": "2020-01-01",  # 獲取較長時間的數據
-            "token": ""  # FinMind 免費版不需要 token
+            "token": token or ""  # 使用輸入的 Token，可提升配額
         }
 
         response = requests.get(url, params=params, timeout=10)
@@ -1624,7 +1625,7 @@ def main():
         # === 獲取所有數據 ===
         with st.spinner("📊 正在獲取數據..."):
             # 技術數據
-            stock_data = get_stock_data(symbol)
+            stock_data = get_stock_data(symbol, finmind_token)
             if stock_data is not None:
                 filtered_data = filter_by_date_range(stock_data, start_date, end_date)
                 if filtered_data is not None:
